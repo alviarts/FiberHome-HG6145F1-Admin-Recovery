@@ -1,5 +1,7 @@
 # FiberHome HG6145F1 — Admin Account Recovery via Fake ACS + CWMP
 
+> **⚠️ Device-specific research.** This guide is for the **FiberHome HG6145F1** (ONT/router by Telkom Indonesia). You need physical access to this specific device (or one with the same firmware API) to follow the practical steps. The general concepts (TR-069/CWMP, fake ACS, `SetParameterValues`) apply to any CWMP-compatible device, but the endpoints, parameter paths, and encryption details are FiberHome-specific.
+
 ## The Problem
 
 The ISP's ACS (Auto Configuration Server) can remotely:
@@ -27,6 +29,7 @@ The CPE (Customer Premises Equipment) initiates the CWMP connection to its confi
 
 ## Requirements
 
+- **A FiberHome HG6145F1 router** (this is device-specific)
 - Working `user` session (`user:user1234`)
 - PC on the same LAN (or reachable from the CPE's WAN side)
 - Python with `requests` + `pycryptodome`
